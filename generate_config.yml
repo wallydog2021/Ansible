@@ -1,0 +1,61 @@
+---
+- name: Generate Config
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars/standard/global_vars.yml
+    - vars/standard/standard_acls.yml
+
+  tasks:
+    - name: Set Hostname for OT and PIT Switches
+      set_fact:
+        device_hostname: "{{ device_site }}-SW{{ device_number }}-{{ it_or_ot }}-{{ device_location }}"
+      when: it_or_ot == "OT" or it_or_ot == "PIT"
+
+    - name: Set Hostname for IT Switches
+      set_fact:
+        device_hostname: "{{ device_site }}-SW{{ device_number }}-{{ device_location }}"
+      when: it_or_ot == "IT"
+
+    - name: Import {{ it_or_ot }} vars
+      include_vars: vars/standard/{{ it_or_ot }}_vars.yml
+
+    - name: Import {{ device_site }} vars
+      include_vars: vars/site_specific/{{ device_site }}_vars.yml
+
+    - name: Generate Configuration File
+      template:
+        src: templates/cisco_template.j2
+        dest: "{{ device_hostname }}.cfg"
+      delegate_to: localhost
+
+    - name: Email config file
+      mail:
+        from: "cliffs_awx@clevelandcliffs.com"
+        to: "{{ email_address }}"
+        subject: Configuration Generator for {{ device_hostname }}
+        subtype: html
+        host: mailhub.cliffsnet.com
+        attach: "{{ device_hostname }}.cfg"
+        body: |
+          1. Save this file as startup-config.cfg\n
+          2. Place on a flash drive.
+          3. Plug flash drive into switch.
+          4. Run: copy usbflash0:startup-config.cfg startup-config
+          5. Reboot switch.
+          (optional): If this is a used device, you might need to
+          delete the vlan.dat file "delete flash:vlan.dat"
+
+    - name: Update Ansible Tower inventory with new device
+      uri:
+        url: https://clawxp01.cliffsnet.com/api/v2/groups/{{ awx_group_id }}/hosts/
+        user: "{{ awx_inventory_admin }}"
+        password: "{{ awx_inventory_admin_password }}"
+        method: POST
+        body: '{ "name" : "{{ device_hostname }}" }'
+        force_basic_auth: yes
+        status_code: 201
+        body_format: json
+        validate_certs: no
+      delegate_to: localhost
